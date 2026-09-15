@@ -208,20 +208,21 @@ public class Agent extends Entity {
     }
 
     public Shot useWeapon() {
-        if (this.energy >= this.getWeapon().getEnergyCost()) {
-            boolean isFlipped = this.getAnimationState().isFlipped();
-            Shot shot = this.weapon.fire(
-                    isFlipped ? this.getFlippedPosX() : this.getPosX(),
-                    this.getPosY(),
-                    this.getWidth(),
-                    isFlipped ? Direction.LEFT : Direction.RIGHT);
-            if (shot != null) {
-                this.setStatus(EntityStatus.ATTACK);
-                this.consumeEnergy(this.getWeapon().getEnergyCost());
-                return shot;
-            }
+        if (this.weapon == null || this.energy < this.weapon.getEnergyCost()) {
+            return null;
         }
-        return null;
+
+        boolean isFlipped = this.getAnimationState().isFlipped();
+        Shot shot = this.weapon.fire(
+                isFlipped ? this.getFlippedPosX() : this.getPosX(),
+                this.getPosY(),
+                this.getWidth(),
+                isFlipped ? Direction.LEFT : Direction.RIGHT);
+        if (shot != null) {
+            this.setStatus(EntityStatus.ATTACK);
+            this.consumeEnergy(this.weapon.getEnergyCost());
+        }
+        return shot;
     }
 
     public Agent copy(int posX, int posY) {

@@ -58,7 +58,6 @@ public class GameMediator implements GameDrawer {
         //this.layeredGame();
     }
 
-    @SuppressWarnings("unused")
     private void beatThemUp() {
         this.drawBackground();
         this.drawEntities();
@@ -92,7 +91,6 @@ public class GameMediator implements GameDrawer {
      * <li>Arcade-style 2D games with predefined visual layers</li>
      * </ul>
      */
-    @SuppressWarnings("unused")
     private void layeredGame() {
         this.drawBackground();
         this.drawAgents();

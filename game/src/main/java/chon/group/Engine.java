@@ -5,11 +5,14 @@ import chon.group.game.drawer.client.JavaFxDrawer;
 import chon.group.game.drawer.service.GameDrawer;
 import chon.group.game.drawer.service.GameMediator;
 import chon.group.game.joystick.client.JavaFxJoystick;
+import chon.group.game.joystick.client.ExternalJoystick;
+import chon.group.game.joystick.client.Joystick;
 import chon.group.game.joystick.service.JoystickMediator;
 import chon.group.game.joystick.service.GameJoystick;
 import chon.group.game.loader.GameSet;
 import chon.group.game.sound.client.JavaFxPlayer;
 import chon.group.game.sound.service.GameSoundManager;
+import chon.group.game.gateway.GameGateway;
 import javafx.animation.AnimationTimer;
 import javafx.application.Application;
 import javafx.scene.Scene;
@@ -23,6 +26,9 @@ import javafx.stage.Stage;
  * and serves as the game engine for "Chon: The Learning Game."
  */
 public class Engine extends Application {
+
+    private static final boolean USE_EXTERNAL_JOYSTICK = true;
+    private final chon.group.game.gateway.GameSnapshotBuilder snapshotBuilder = new chon.group.game.gateway.GameSnapshotBuilder();
 
     /**
      * Main entry point of the application.
@@ -50,8 +56,16 @@ public class Engine extends Application {
 
             root.getChildren().add(canvas);
 
-            /* Set up the joystick for user input */
-            GameJoystick joystick = new JoystickMediator(new JavaFxJoystick(scene));
+            /* Set up exactly one input source for the game. */
+            Joystick joystickClient;
+            ExternalJoystick externalJoystick = null;
+            if (USE_EXTERNAL_JOYSTICK) {
+                externalJoystick = new ExternalJoystick();
+                joystickClient = externalJoystick;
+            } else {
+                joystickClient = new JavaFxJoystick(scene);
+            }
+            GameJoystick joystick = new JoystickMediator(joystickClient);
 
             GameSoundManager soundManager = new GameSoundManager(new JavaFxPlayer());
             GameDrawer mediator = new GameMediator(new JavaFxDrawer(gc));
@@ -64,12 +78,44 @@ public class Engine extends Application {
                     joystick,
                     0);
 
+            final GameGateway gateway = externalJoystick == null
+                    ? null
+                    : new GameGateway(8765, externalJoystick);
+            if (gateway != null) {
+                gateway.start();
+            }
+
             // Start the game loop
-            new AnimationTimer() {
+            AnimationTimer timer = new AnimationTimer() {
                 public void handle(long now) {
-                    chonGame.loop();
+                    try {
+                        chonGame.loop();
+
+                        var snapshot = snapshotBuilder.build(
+                                chonGame,
+                                chonGame.getTick());
+
+                        if (gateway != null) {
+                            gateway.publish(snapshot);
+                        }
+                    } catch (RuntimeException exception) {
+                        exception.printStackTrace();
+                    }
                 }
-            }.start();
+            };
+
+            theStage.setOnCloseRequest(event -> {
+                timer.stop();
+                if (gateway != null) {
+                    try {
+                        gateway.close();
+                    } catch (Exception exception) {
+                        exception.printStackTrace();
+                    }
+                }
+            });
+
+            timer.start();
 
             theStage.show();
         } catch (Exception e) {

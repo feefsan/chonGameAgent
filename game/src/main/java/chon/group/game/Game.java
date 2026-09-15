@@ -29,6 +29,7 @@ public class Game {
     private long lastLoop = 0;
     private long interval = 0;
     private GameJoystick joystick;
+    private long tick;
 
     public Game(
             Environment environment,
@@ -117,8 +118,14 @@ public class Game {
             this.playSounds();
             /* renders the current level. */
             this.currentState.render(this);
+            this.tick++;
         }
     }
+
+    public long getTick() {
+        return tick;
+    }
+
 
     private void playSounds() {
         for (Sound sound : this.environment.getSounds()) {
