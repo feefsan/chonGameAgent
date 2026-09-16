@@ -758,7 +758,7 @@
                     "hitboxRatio": 0.4
                 },
                 "stats": {
-                    "speed": 1,
+                    "speed": 4,
                     "health": 5000
                 },
                 "state": {
@@ -797,7 +797,7 @@
                     "hitboxRatio": 0.6
                 },
                 "stats": {
-                    "speed": 1,
+                    "speed": 2,
                     "health": 500
                 },
                 "state": {
@@ -879,7 +879,7 @@
                     "width": 88,
                     "height": 64
                 },
-                "speed": 3,
+                "speed": 9,
                 "damage": 250,
                 "range": 1200,
                 "destructible": false,
@@ -890,7 +890,7 @@
                     "width": 60,
                     "height": 80
                 },
-                "speed": 2,
+                "speed": 9,
                 "damage": 500,
                 "range": 150,
                 "destructible": false,
@@ -901,7 +901,7 @@
                     "width": 30,
                     "height": 15
                 },
-                "speed": 3,
+                "speed": 9,
                 "damage": 500,
                 "range": 15,
                 "destructible": false,

@@ -52,7 +52,9 @@ public class GameSnapshotBuilder {
                 entity.getFullHealth(),
                 entity.getDirection().name(),
                 entity.getStatus().name(),
-                entity.isTerminated());
+                entity.isTerminated(),
+                entity instanceof chon.group.game.core.agent.Object object
+                        && object.isCollectible());
     }
 
     public record GameSnapshot(
@@ -87,6 +89,7 @@ public class GameSnapshotBuilder {
             int maxHealth,
             String direction,
             String status,
-            boolean dead) {
+            boolean dead,
+            boolean collectible) {
     }
 }
