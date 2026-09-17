@@ -25,6 +25,7 @@ public class GameGateway implements AutoCloseable {
     private final int requestedPort;
     private final ExternalJoystick joystick;
     private final ObjectMapper mapper = new ObjectMapper();
+    private final GameActionQueue actionQueue = new GameActionQueue();
     private final ExecutorService clients = Executors.newCachedThreadPool();
     private final CopyOnWriteArrayList<ClientSession> connectedClients = new CopyOnWriteArrayList<>();
     private volatile boolean running;
@@ -94,7 +95,7 @@ public class GameGateway implements AutoCloseable {
                 try {
                     JsonNode message = mapper.readTree(line);
                     if ("action".equals(message.path("type").asText())) {
-                        applyExternalAction(message.path("action"));
+                        actionQueue.offer(toGameAction(message));
                         client.sendControl("{\"type\":\"action_ack\",\"accepted\":true}");
                     } else {
                         client.sendControl("{\"type\":\"error\",\"message\":\"Unsupported message type\"}");
@@ -119,10 +120,31 @@ public class GameGateway implements AutoCloseable {
         }
     }
 
-    private void applyExternalAction(JsonNode action) {
-        String name = action.path("name").asText("").toUpperCase();
+    private GameAction toGameAction(JsonNode message) {
+        JsonNode action = message.path("action");
+        return new GameAction(
+                message.path("requestId").asText(""),
+                message.path("agentId").asText(""),
+                message.path("expectedTick").asLong(-1),
+                action.path("name").asText(""),
+                action.path("direction").asText(null));
+    }
+
+    public void processPendingActions(long currentTick) {
+        GameAction action;
+        while ((action = actionQueue.poll()) != null) {
+            if (action.expectedTick() >= 0 && action.expectedTick() > currentTick) {
+                actionQueue.offer(action);
+                break;
+            }
+            applyExternalAction(action);
+        }
+    }
+
+    private void applyExternalAction(GameAction action) {
+        String name = action.name().toUpperCase();
         switch (name) {
-            case "MOVE" -> applyExternalMovement(action.path("direction").asText(null));
+            case "MOVE" -> applyExternalMovement(action.direction());
             case "ATTACK" -> joystick.press(GameCommand.ATTACK);
             case "CONFIRM" -> joystick.press(GameCommand.CONFIRM);
             case "PAUSE" -> joystick.press(GameCommand.PAUSE);
