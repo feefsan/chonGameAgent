@@ -26,6 +26,9 @@ public class Agent extends Entity {
     /** The Agent's Weapon */
     private Weapon weapon;
 
+    /** Whether this agent's movement is driven by an external client instead of AI. */
+    private boolean externallyControlled = false;
+
     /** The initial agent's energy */
     private double energy;
 
@@ -80,6 +83,24 @@ public class Agent extends Entity {
         this.fullEnergy = 1.0;
         this.recoveryFactor = recoveryFactor;
         this.cooldown = cooldown;
+    }
+
+    /**
+     * Gets if this agent's movement is driven by an external client.
+     *
+     * @return if the agent is externally controlled
+     */
+    public boolean isExternallyControlled() {
+        return externallyControlled;
+    }
+
+    /**
+     * Sets whether this agent's movement is driven by an external client.
+     *
+     * @param externallyControlled the new externally controlled status
+     */
+    public void setExternallyControlled(boolean externallyControlled) {
+        this.externallyControlled = externallyControlled;
     }
 
     /**

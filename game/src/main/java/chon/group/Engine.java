@@ -89,6 +89,11 @@ public class Engine extends Application {
             AnimationTimer timer = new AnimationTimer() {
                 public void handle(long now) {
                     try {
+                        if (gateway != null) {
+                            gateway.processPendingActions(chonGame.getTick());
+                            gateway.updateControlledAgents(chonGame);
+                        }
+
                         chonGame.loop();
 
                         var snapshot = snapshotBuilder.build(

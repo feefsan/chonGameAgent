@@ -3,6 +3,8 @@ package chon.group.game.gateway;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import chon.group.game.Game;
+import chon.group.game.core.environment.Environment;
 import chon.group.game.joystick.GameCommand;
 import chon.group.game.joystick.client.ExternalJoystick;
 
@@ -18,23 +20,36 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
-/** TCP/JSON gateway for agents running outside the game JVM. */
+/**
+ * TCP/JSON gateway for agents running outside the game JVM.
+ *
+ * <p>
+ * Every connecting client is given its own {@link ExternalAgentController}: the
+ * first connection controls the protagonist, and each subsequent connection
+ * controls the next available agent from the current level (slot {@code n}
+ * maps to {@code Level.getAgents().get(n - 1)}).
+ * </p>
+ */
 public class GameGateway implements AutoCloseable {
 
     private final int requestedPort;
-    private final ExternalJoystick joystick;
+    private final ExternalJoystick protagonistJoystick;
     private final ObjectMapper mapper = new ObjectMapper();
-    private final GameActionQueue actionQueue = new GameActionQueue();
     private final ExecutorService clients = Executors.newCachedThreadPool();
     private final CopyOnWriteArrayList<ClientSession> connectedClients = new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<ExternalAgentController> controllers = new CopyOnWriteArrayList<>();
+    private final AtomicBoolean protagonistClaimed = new AtomicBoolean(false);
+    private final AtomicInteger nextBotSlot = new AtomicInteger(1);
     private volatile boolean running;
     private ServerSocket serverSocket;
     private volatile String latestObservation;
 
-    public GameGateway(int port, ExternalJoystick joystick) {
+    public GameGateway(int port, ExternalJoystick protagonistJoystick) {
         this.requestedPort = port;
-        this.joystick = joystick;
+        this.protagonistJoystick = protagonistJoystick;
     }
 
     public void start() throws IOException {
@@ -78,6 +93,8 @@ public class GameGateway implements AutoCloseable {
 
     private void handleClient(Socket socket) {
         ClientSession client = null;
+        ExternalAgentController control = assignController();
+        controllers.add(control);
         try (socket;
                 BufferedReader reader = new BufferedReader(
                         new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
@@ -85,7 +102,7 @@ public class GameGateway implements AutoCloseable {
                         new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8))) {
             client = new ClientSession(writer);
             connectedClients.add(client);
-            client.sendControl("{\"type\":\"hello\",\"protocolVersion\":1}");
+            client.sendControl(helloMessage(control));
             if (latestObservation != null) {
                 client.offerObservation(latestObservation);
             }
@@ -95,7 +112,7 @@ public class GameGateway implements AutoCloseable {
                 try {
                     JsonNode message = mapper.readTree(line);
                     if ("action".equals(message.path("type").asText())) {
-                        actionQueue.offer(toGameAction(message));
+                        control.getActionQueue().offer(toGameAction(message));
                         client.sendControl("{\"type\":\"action_ack\",\"accepted\":true}");
                     } else {
                         client.sendControl("{\"type\":\"error\",\"message\":\"Unsupported message type\"}");
@@ -117,6 +134,69 @@ public class GameGateway implements AutoCloseable {
                 connectedClients.remove(client);
                 client.close();
             }
+            /* The game thread finishes releasing the bound agent and frees the slot. */
+            control.close();
+        }
+    }
+
+    /** Assigns the protagonist to the first client and the next free bot slot to every other. */
+    private ExternalAgentController assignController() {
+        if (protagonistClaimed.compareAndSet(false, true)) {
+            return new ExternalAgentController(0, protagonistJoystick);
+        }
+        int slot = nextBotSlot.getAndIncrement();
+        return new ExternalAgentController(slot, new ExternalJoystick());
+    }
+
+    private String helloMessage(ExternalAgentController control) {
+        String role = control.isProtagonist() ? "protagonist" : ("agent-" + control.getSlot());
+        return "{\"type\":\"hello\",\"protocolVersion\":1,\"controls\":\"" + role + "\"}";
+    }
+
+    /**
+     * Applies queued actions to each client's own joystick. Must only be called
+     * from the game thread.
+     */
+    public void processPendingActions(long currentTick) {
+        for (ExternalAgentController control : controllers) {
+            GameActionQueue queue = control.getActionQueue();
+            GameAction action;
+            while ((action = queue.poll()) != null) {
+                if (action.expectedTick() >= 0 && action.expectedTick() > currentTick) {
+                    queue.offer(action);
+                    break;
+                }
+                applyExternalAction(control.getJoystick(), action);
+            }
+        }
+    }
+
+    /**
+     * Moves every bot bound to a connected client and reclaims controllers whose
+     * client disconnected. Must only be called from the game thread.
+     */
+    public void updateControlledAgents(Game game) {
+        Environment environment = game.getEnvironment();
+        if (environment.getCurrentLevel() != null) {
+            environment.getCurrentLevel().getAgents().forEach(agent -> {
+                if (!agent.isDead()) {
+                    agent.setExternallyControlled(true);
+                    agent.idle();
+                }
+            });
+        }
+        for (ExternalAgentController control : controllers) {
+            if (control.isClosed()) {
+                if (control.isProtagonist()) {
+                    protagonistClaimed.set(false);
+                    control.getJoystick().clear();
+                } else {
+                    control.release();
+                }
+                controllers.remove(control);
+                continue;
+            }
+            control.update(environment);
         }
     }
 
@@ -130,21 +210,10 @@ public class GameGateway implements AutoCloseable {
                 action.path("direction").asText(null));
     }
 
-    public void processPendingActions(long currentTick) {
-        GameAction action;
-        while ((action = actionQueue.poll()) != null) {
-            if (action.expectedTick() >= 0 && action.expectedTick() > currentTick) {
-                actionQueue.offer(action);
-                break;
-            }
-            applyExternalAction(action);
-        }
-    }
-
-    private void applyExternalAction(GameAction action) {
+    private void applyExternalAction(ExternalJoystick joystick, GameAction action) {
         String name = action.name().toUpperCase();
         switch (name) {
-            case "MOVE" -> applyExternalMovement(action.direction());
+            case "MOVE" -> applyExternalMovement(joystick, action.direction());
             case "ATTACK" -> joystick.press(GameCommand.ATTACK);
             case "CONFIRM" -> joystick.press(GameCommand.CONFIRM);
             case "PAUSE" -> joystick.press(GameCommand.PAUSE);
@@ -157,20 +226,20 @@ public class GameGateway implements AutoCloseable {
         }
     }
 
-    private void applyExternalMovement(String direction) {
+    private void applyExternalMovement(ExternalJoystick joystick, String direction) {
         if (direction == null) {
             return;
         }
         try {
             GameCommand command = GameCommand.valueOf(direction.toUpperCase());
             joystick.hold(command);
-            releaseOtherDirections(command);
+            releaseOtherDirections(joystick, command);
         } catch (IllegalArgumentException exception) {
             // Invalid actions are ignored by the external joystick.
         }
     }
 
-    private void releaseOtherDirections(GameCommand activeCommand) {
+    private void releaseOtherDirections(ExternalJoystick joystick, GameCommand activeCommand) {
         for (GameCommand direction : new GameCommand[] {
                 GameCommand.UP, GameCommand.DOWN, GameCommand.LEFT, GameCommand.RIGHT }) {
             if (direction != activeCommand) {
