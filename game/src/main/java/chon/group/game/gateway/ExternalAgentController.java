@@ -18,22 +18,25 @@ import chon.group.game.sound.SoundEvent;
  *
  * <p>
  * Slot {@code 0} always maps to the protagonist, whose movement keeps being
- * driven by the game's normal input pipeline. Slots {@code 1} and above map
- * to {@code Level.getAgents().get(slot - 1)}, resolved fresh every tick since
- * the agent list changes across levels.
+ * driven by the game's normal input pipeline. Bot controllers keep the stable
+ * ID of the nearest agent selected when the client connects.
  * </p>
  */
 public class ExternalAgentController {
 
     private final int slot;
     private final ExternalJoystick joystick;
+    private volatile String assignedAgentId;
     private final GameActionQueue actionQueue = new GameActionQueue();
     private volatile boolean closed;
     private Agent boundAgent;
+    private boolean bindingResolved;
+    private boolean gameOverNotified;
 
-    public ExternalAgentController(int slot, ExternalJoystick joystick) {
+    public ExternalAgentController(int slot, ExternalJoystick joystick, String assignedAgentId) {
         this.slot = slot;
         this.joystick = joystick;
+        this.assignedAgentId = assignedAgentId;
     }
 
     public int getSlot() {
@@ -46,6 +49,16 @@ public class ExternalAgentController {
 
     public ExternalJoystick getJoystick() {
         return joystick;
+    }
+
+    public String getAssignedAgentId() {
+        return assignedAgentId;
+    }
+
+    public void assignAgent(String assignedAgentId) {
+        if (!bindingResolved && this.assignedAgentId == null) {
+            this.assignedAgentId = assignedAgentId;
+        }
     }
 
     public GameActionQueue getActionQueue() {
@@ -65,30 +78,47 @@ public class ExternalAgentController {
      * protagonist keeps being handled by the normal game/joystick pipeline.
      * Must only be called from the game thread.
      */
-    public void update(Environment environment) {
+    public boolean update(Environment environment) {
         if (isProtagonist()) {
-            return;
+            if (environment.getProtagonist() != null
+                    && environment.getProtagonist().isDead()) {
+                if (!gameOverNotified) {
+                    gameOverNotified = true;
+                    return true;
+                }
+                return false;
+            }
+            gameOverNotified = false;
+            return false;
+        }
+
+        if (bindingResolved && boundAgent == null) {
+            return false;
         }
 
         Level level = environment.getCurrentLevel();
-        int index = slot - 1;
-        Agent agent = (level != null && index >= 0 && index < level.getAgents().size())
-                ? level.getAgents().get(index)
-                : null;
-
-        if (boundAgent != null && boundAgent != agent) {
-            boundAgent.setExternallyControlled(false);
-        }
-        boundAgent = agent;
-
-        if (agent == null || agent.isDead()) {
-            return;
+        if (!bindingResolved) {
+            boundAgent = level == null ? null : level.getAgents().stream()
+                .filter(agent -> agent.getId().equals(assignedAgentId))
+                .findFirst()
+                .orElse(null);
+            if (boundAgent == null) {
+                return false;
+            }
+            bindingResolved = true;
         }
 
-        agent.setExternallyControlled(true);
-        applyMovement(agent);
-        applyAttack(agent, level, environment);
+        if (boundAgent.isDead()) {
+            closed = true;
+            return true;
+        }
+
+        boundAgent.setExternallyControlled(true);
+        applyMovement(boundAgent);
+        clampToLevelBounds(boundAgent, level);
+        applyAttack(boundAgent, level, environment);
         joystick.endFrame();
+        return false;
     }
 
     /** Releases the bound agent back to AI control. Must only be called from the game thread. */
@@ -97,6 +127,7 @@ public class ExternalAgentController {
             boundAgent.setExternallyControlled(false);
             boundAgent = null;
         }
+        bindingResolved = true;
     }
 
     private void applyMovement(Agent agent) {
@@ -118,6 +149,25 @@ public class ExternalAgentController {
             agent.idle();
         } else {
             agent.move(directions);
+        }
+    }
+
+    private void clampToLevelBounds(Agent agent, Level level) {
+        if (level == null) {
+            return;
+        }
+
+        if (agent.getPosX() < 0) {
+            agent.setPosX(0);
+        }
+        if (agent.getPosX() + agent.getWidth() > level.getWidth()) {
+            agent.setPosX(level.getWidth() - agent.getWidth());
+        }
+        if (agent.getPosY() < level.getTopY()) {
+            agent.setPosY(level.getTopY());
+        }
+        if (agent.getPosY() + agent.getHeight() > level.getBottomY()) {
+            agent.setPosY(level.getBottomY() - agent.getHeight());
         }
     }
 
