@@ -1259,7 +1259,7 @@
                     "ref": "chonBot",
                     "spawn": {
                         "x": 2920,
-                        "y": 640
+                        "y": 440
                     },
                     "visibleBars": true
                 }
